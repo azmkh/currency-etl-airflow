@@ -1,0 +1,108 @@
+# ===========================================================================
+# docker-compose.override.yml
+# ---------------------------------------------------------------------------
+# The Astro CLI starts Airflow with its own (hidden) docker-compose file.
+# Any services/networks/volumes written here are MERGED into that file,
+# so `astro dev start` will also start MongoDB and Mongo Express.
+#
+# NOTE: the usernames/passwords below are for LOCAL DEVELOPMENT ONLY.
+# ===========================================================================
+
+services:
+  # -------------------------------------------------------------------------
+  # MongoDB - the database where the transformed exchange rates are stored
+  # -------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7.0
+    hostname: mongodb                 # other containers reach it at "mongodb"
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+      MONGO_INITDB_DATABASE: currency_db
+    ports:
+      - "27017:27017"                 # host:container (lets tools like Compass connect)
+    volumes:
+      - mongo_data:/data/db           # persistent storage for the database files
+      - mongo_config:/data/configdb   # persistent storage for MongoDB config
+    networks:
+      - currency_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    labels:                           # meta details
+      maintainer: "madeeha.mailz@gmail.com"
+      org.opencontainers.image.title: "currency-etl-mongodb"
+      org.opencontainers.image.description: "MongoDB database that stores daily currency exchange rates"
+      org.opencontainers.image.version: "7.0"
+      project.component: "database"
+      project.course: "MLOps"
+
+  # -------------------------------------------------------------------------
+  # Mongo Express - web UI for browsing MongoDB  ->  http://localhost:8081
+  # -------------------------------------------------------------------------
+  mongo-express:
+    image: mongo-express:1.0.2
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy    # wait until MongoDB answers a ping
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://admin:admin123@mongodb:27017/?authSource=admin
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: admin   # login for the web page
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    ports:
+      - "8081:8081"
+    networks:
+      - currency_net
+    labels:                           # meta details
+      maintainer: "madeeha.mailz@gmail.com"
+      org.opencontainers.image.title: "currency-etl-mongo-express"
+      org.opencontainers.image.description: "Mongo Express web admin interface for the currency MongoDB"
+      org.opencontainers.image.version: "1.0.2"
+      project.component: "database-admin-ui"
+      project.course: "MLOps"
+
+  # -------------------------------------------------------------------------
+  # Attach the Airflow containers to our custom network as well, so that the
+  # tasks (which run inside these containers) can reach "mongodb" by name.
+  # "airflow" is the network Astro already creates; we keep it.
+  # -------------------------------------------------------------------------
+  scheduler:
+    networks:
+      - airflow
+      - currency_net
+  dag-processor:
+    networks:
+      - airflow
+      - currency_net
+  api-server:
+    networks:
+      - airflow
+      - currency_net
+  triggerer:
+    networks:
+      - airflow
+      - currency_net
+
+# ---------------------------------------------------------------------------
+# Docker networking: a dedicated bridge network for the ETL stack
+# ---------------------------------------------------------------------------
+networks:
+  currency_net:
+    name: currency_net
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Persistent storage: named volumes survive `astro dev stop` / `restart`
+# ---------------------------------------------------------------------------
+volumes:
+  mongo_data:
+    name: currency_mongo_data
+  mongo_config:
+    name: currency_mongo_config
